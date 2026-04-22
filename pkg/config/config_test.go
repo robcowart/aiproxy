@@ -104,6 +104,23 @@ pools:
 	assert.Contains(t, err.Error(), "duplicate")
 }
 
+func TestLoad_OllamaSchema(t *testing.T) {
+	y := `
+server:
+  port: 8080
+  api_key: 'x'
+pools:
+  - model: 'llama3.2'
+    endpoint: 'chat_completions'
+    schema: 'ollama'
+    instances: [{ url: 'http://x:11434', api_key: 'k' }]
+`
+	cfg, err := Load(writeTempConfig(t, y))
+	assert.NoError(t, err)
+	assert.Len(t, cfg.Pools, 1)
+	assert.Equal(t, SchemaOllama, cfg.Pools[0].Schema)
+}
+
 func TestLoad_InvalidSchema(t *testing.T) {
 	y := `
 server:

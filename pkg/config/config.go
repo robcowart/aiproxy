@@ -26,6 +26,7 @@ const (
 	SchemaOpenAI    SchemaName = "openai"
 	SchemaAnthropic SchemaName = "anthropic"
 	SchemaGoogle    SchemaName = "google"
+	SchemaOllama    SchemaName = "ollama"
 )
 
 // EndpointType identifies which OpenAI-compatible route a pool serves.
@@ -174,7 +175,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("pools[%d] (%s): invalid endpoint %q", i, p.Model, p.Endpoint)
 		}
 		switch p.Schema {
-		case SchemaLlamaCPP, SchemaOpenAI, SchemaAnthropic, SchemaGoogle:
+		case SchemaLlamaCPP, SchemaOpenAI, SchemaAnthropic, SchemaGoogle, SchemaOllama:
 		default:
 			return fmt.Errorf("pools[%d] (%s): invalid schema %q", i, p.Model, p.Schema)
 		}

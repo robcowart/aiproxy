@@ -14,7 +14,7 @@ server:
 pools:
   - model: 'MODEL-NAME'
     endpoint: 'chat_completions' # chat_completions, embeddings, rerank
-    schema: 'llamacpp' # anthropic, google, openai, llamacpp
+    schema: 'llamacpp' # anthropic, google, openai, llamacpp, ollama
     instances:
       - url: 'http://192.0.2.11:8080'
         api_key: 'INSTANCE-API-KEY'
