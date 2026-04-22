@@ -1,14 +1,14 @@
 # aiproxy
 
-A model-aware, OpenAI-compatible reverse proxy for pools of local/remote LLM backends (llama.cpp, OpenAI, Anthropic, Google, Ollama).
+A model-aware, OpenAI-compatible reverse proxy for pools of local/remote LLM backends (llama.cpp, vLLM, OpenAI, Anthropic, Google, Ollama).
 
 > WARNING! This is still a work-in-progress. My main use-case is providing a single OpenAI API-compatible service from which I can reach multiple llama-server (llama.cpp) instances in my AI lab. It is working really well for this use-case so far. However I have not yet thoroughly tested the other backend LLM services. If you encounter any problems, please open an issue or PR.
 
-## Supported backend `schema` values:
+## Supported backend `schema` values
 
 | Schema      | Description                                                                                                                                                                                                                                                |
 |-------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `llamacpp`  | llama.cpp servers (OpenAI-compatible wire format, `/health` probe)                                                                                                                                                                                         |
+| `llamacpp`  | llama.cpp servers (OpenAI-compatible wire format, `/health` probe). Also works for **vLLM**, which exposes an OpenAI-compatible server with the same `/health` probe.                                                                                      |
 | `openai`    | OpenAI API and OpenAI-compatible providers                                                                                                                                                                                                                 |
 | `anthropic` | Anthropic Messages API (`/v1/messages`)                                                                                                                                                                                                                    |
 | `google`    | Google Gemini API                                                                                                                                                                                                                                          |
