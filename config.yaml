@@ -1,0 +1,30 @@
+server:
+  host: '0.0.0.0'
+  port: 8080
+  api_key: 'PROXY-API-KEY'
+  log_level: 'info'  # debug, info, warn, error
+  
+  # TLS/HTTPS Configuration (optional)
+  # Uncomment and configure to enable HTTPS
+  tls:
+    enabled: false  # Set to true to enable HTTPS
+    # cert_file: '/path/to/server-cert.pem'     # Server certificate file
+    # key_file: '/path/to/server-key.pem'       # Server private key file
+
+pools:
+  - model: 'MODEL-NAME'
+    endpoint: 'chat_completions' # chat_completions, embeddings, rerank
+    schema: 'llamacpp' # anthropic, google, openai, llamacpp, ollama
+    instances:
+      - url: 'http://192.0.2.11:8080'
+        api_key: 'INSTANCE-API-KEY'
+        # tls:                                  # May be necessary if URL is https:
+        #   ca_file: '/path/to/backend-ca.pem'  # Custom CA certificate for backend validation (use OS-installed CA certs if not specified)
+        #   insecure_skip_verify: false         # Set to true to skip certificate verification (not recommended for production)
+      - url: 'http://192.0.2.12:8080'
+        api_key: 'INSTANCE-API-KEY'
+        # tls:                                  # May be necessary if URL is https:
+        #   ca_file: '/path/to/backend-ca.pem'  # Custom CA certificate for backend validation (use OS-installed CA certs if not specified)
+        #   insecure_skip_verify: false         # Set to true to skip certificate verification (not recommended for production)
+    session_timeout: 300       # seconds
+    health_check_interval: 30  # seconds

@@ -1,0 +1,32 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Build output
+bin/
+
+# Test config
+config.test.yaml
+
+# Test artifacts
+*.test
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Secrets / env
+.env
+
+# Editor / IDE
+.idea
+.vscode
+
+# Docker
+Dockerfile
+.dockerignore
