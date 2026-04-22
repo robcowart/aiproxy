@@ -2,7 +2,7 @@ BINARY       ?= aiproxy
 BIN_DIR      ?= bin
 PKG          := ./...
 LDFLAGS      := -s -w
-IMAGE        ?= aiproxy
+IMAGE        ?= robcowart/aiproxy
 IMAGE_TAG    ?= latest
 
 .PHONY: build test docker
