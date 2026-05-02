@@ -149,6 +149,80 @@ func TestServer_ListModels_EnrichesFromBackend(t *testing.T) {
 	assert.Contains(t, body, `"id":"rerank-model"`)
 }
 
+func TestServer_ListModels_EnrichesWhenBackendIDIsAliased(t *testing.T) {
+	chatH := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/models" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"object":"list",
+				"data":[{
+					"id":"chat-model-mxfp4_moe_bf16",
+					"aliases":["chat-model"],
+					"object":"model",
+					"created":1777716931,
+					"owned_by":"llamacpp",
+					"meta":{"n_ctx_train":262144,"n_params":122111526912}
+				}]
+			}`))
+			return
+		}
+	}
+	h, cleanup := buildTestServer(t, chatH,
+		func(w http.ResponseWriter, _ *http.Request) {},
+		func(w http.ResponseWriter, _ *http.Request) {},
+	)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer clientkey")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, `"id":"chat-model"`)
+	assert.NotContains(t, body, `"chat-model-mxfp4_moe_bf16"`)
+	assert.NotContains(t, body, `"aliases"`)
+	assert.Contains(t, body, `"created":1777716931`)
+	assert.Contains(t, body, `"n_ctx_train":262144`)
+	assert.Contains(t, body, `"n_params":122111526912`)
+}
+
+func TestServer_ListModels_EnrichesWhenBackendReportsSingleSuffixedModel(t *testing.T) {
+	chatH := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/models" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"object":"list",
+				"data":[{
+					"id":"chat-model-q8_0",
+					"object":"model",
+					"created":1777716931,
+					"owned_by":"llamacpp",
+					"meta":{"n_ctx_train":262144}
+				}]
+			}`))
+			return
+		}
+	}
+	h, cleanup := buildTestServer(t, chatH,
+		func(w http.ResponseWriter, _ *http.Request) {},
+		func(w http.ResponseWriter, _ *http.Request) {},
+	)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer clientkey")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, `"id":"chat-model"`)
+	assert.NotContains(t, body, `"chat-model-q8_0"`)
+	assert.Contains(t, body, `"n_ctx_train":262144`)
+}
+
 func TestServer_AuthRequired(t *testing.T) {
 	h, cleanup := buildTestServer(t,
 		func(w http.ResponseWriter, _ *http.Request) {},

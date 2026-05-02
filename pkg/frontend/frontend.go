@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -271,10 +272,9 @@ func (f *Frontend) fetchModelInfo(ctx context.Context, p *backend.Pool) schema.M
 			zap.String("pool", p.Model), zap.String("instance", inst.URL), zap.Error(err))
 		return fallback
 	}
-	for _, m := range models {
-		if m.ID != p.Model {
-			continue
-		}
+	if m, ok := selectModel(models, p.Model); ok {
+		m.ID = p.Model
+		m.Aliases = nil
 		if m.Object == "" {
 			m.Object = "model"
 		}
@@ -284,4 +284,25 @@ func (f *Frontend) fetchModelInfo(ctx context.Context, p *backend.Pool) schema.M
 		return m
 	}
 	return fallback
+}
+
+// selectModel picks the backend ModelInfo entry that corresponds to the pool's configured model name. It first
+// looks for an exact id match, then for a match on any advertised alias. When the backend reports exactly one model
+// (common with llama.cpp and Ollama) it falls through to that entry so a suffixed id without aliases still surfaces
+// metadata.
+func selectModel(models []schema.ModelInfo, want string) (schema.ModelInfo, bool) {
+	for _, m := range models {
+		if m.ID == want {
+			return m, true
+		}
+	}
+	for _, m := range models {
+		if slices.Contains(m.Aliases, want) {
+			return m, true
+		}
+	}
+	if len(models) == 1 {
+		return models[0], true
+	}
+	return schema.ModelInfo{}, false
 }

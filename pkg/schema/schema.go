@@ -150,9 +150,12 @@ type Usage struct {
 
 // ModelInfo describes a single model exposed by a backend in the /v1/models listing. Meta is an opaque JSON
 // pass-through for provider-specific extras (e.g., llama.cpp's `meta` object with vocab/context/embedding/param
-// counts) so no fields are silently dropped.
+// counts) so no fields are silently dropped. Aliases captures alternate identifiers that some backends (notably
+// llama.cpp) advertise alongside `id`, so the frontend can match a pool's configured model name even when the backend
+// reports a quantization-suffixed canonical id.
 type ModelInfo struct {
 	ID      string          `json:"id"`
+	Aliases []string        `json:"aliases,omitempty"`
 	Object  string          `json:"object,omitempty"`
 	Created int64           `json:"created,omitempty"`
 	OwnedBy string          `json:"owned_by,omitempty"`
