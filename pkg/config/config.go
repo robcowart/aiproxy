@@ -72,6 +72,7 @@ type PoolConfig struct {
 	HealthPath          string           `koanf:"health_path"`
 	MaxInflight         int              `koanf:"max_inflight_per_instance"`
 	RateLimit           RateLimitConfig  `koanf:"rate_limit"`
+	Parameters          map[string]any   `koanf:"parameters"`
 }
 
 // RateLimitConfig is optional per-pool token-bucket configuration.
@@ -200,8 +201,129 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("pools[%d].instances[%d]: api_key is required", i, j)
 			}
 		}
+		if err := validatePoolParameters(i, p); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// paramKind enumerates the value type expected for a configured parameter override.
+type paramKind int
+
+const (
+	paramKindNumber paramKind = iota
+	paramKindInt
+	paramKindBool
+	paramKindString
+	paramKindStringArray
+	paramKindObject
+)
+
+type paramSpec struct {
+	kind         paramKind
+	llamaCPPOnly bool
+}
+
+// chatParamSpecs is the allow-list of parameter override keys for chat_completions pools. Entries with
+// llamaCPPOnly=true may only be used when the pool's schema is SchemaLlamaCPP.
+var chatParamSpecs = map[string]paramSpec{
+	"max_tokens":        {kind: paramKindInt},
+	"temperature":       {kind: paramKindNumber},
+	"top_p":             {kind: paramKindNumber},
+	"top_k":             {kind: paramKindInt},
+	"min_p":             {kind: paramKindNumber},
+	"stream":            {kind: paramKindBool},
+	"stop":              {kind: paramKindStringArray},
+	"presence_penalty":  {kind: paramKindNumber},
+	"frequency_penalty": {kind: paramKindNumber},
+	"repeat_penalty":    {kind: paramKindNumber},
+	"n":                 {kind: paramKindInt},
+	"seed":              {kind: paramKindInt},
+	"logprobs":          {kind: paramKindInt},
+	"echo":              {kind: paramKindBool},
+	"suffix":            {kind: paramKindString},
+
+	"mirostat":     {kind: paramKindInt, llamaCPPOnly: true},
+	"mirostat_tau": {kind: paramKindNumber, llamaCPPOnly: true},
+	"mirostat_eta": {kind: paramKindNumber, llamaCPPOnly: true},
+	"grammar":      {kind: paramKindString, llamaCPPOnly: true},
+	"json_schema":  {kind: paramKindObject, llamaCPPOnly: true},
+	"cache_prompt": {kind: paramKindBool, llamaCPPOnly: true},
+}
+
+func validatePoolParameters(i int, p *PoolConfig) error {
+	if len(p.Parameters) == 0 {
+		return nil
+	}
+	if p.Endpoint != EndpointChatCompletions {
+		return fmt.Errorf("pools[%d] (%s): parameters are only supported on chat_completions pools", i, p.Model)
+	}
+	for name, val := range p.Parameters {
+		spec, ok := chatParamSpecs[name]
+		if !ok {
+			return fmt.Errorf("pools[%d] (%s): unknown parameter %q", i, p.Model, name)
+		}
+		if spec.llamaCPPOnly && p.Schema != SchemaLlamaCPP {
+			return fmt.Errorf("pools[%d] (%s): parameter %q is only supported with the llamacpp schema", i, p.Model, name)
+		}
+		if err := checkParamType(name, val, spec.kind); err != nil {
+			return fmt.Errorf("pools[%d] (%s): %w", i, p.Model, err)
+		}
+	}
+	return nil
+}
+
+func checkParamType(name string, val any, kind paramKind) error {
+	switch kind {
+	case paramKindNumber:
+		switch val.(type) {
+		case int, int32, int64, float32, float64:
+			return nil
+		}
+		return fmt.Errorf("parameter %q: expected number, got %T", name, val)
+	case paramKindInt:
+		switch v := val.(type) {
+		case int, int32, int64:
+			return nil
+		case float32:
+			if float32(int64(v)) == v {
+				return nil
+			}
+		case float64:
+			if float64(int64(v)) == v {
+				return nil
+			}
+		}
+		return fmt.Errorf("parameter %q: expected integer, got %T", name, val)
+	case paramKindBool:
+		if _, ok := val.(bool); ok {
+			return nil
+		}
+		return fmt.Errorf("parameter %q: expected boolean, got %T", name, val)
+	case paramKindString:
+		if _, ok := val.(string); ok {
+			return nil
+		}
+		return fmt.Errorf("parameter %q: expected string, got %T", name, val)
+	case paramKindStringArray:
+		arr, ok := val.([]any)
+		if !ok {
+			return fmt.Errorf("parameter %q: expected array of strings, got %T", name, val)
+		}
+		for idx, item := range arr {
+			if _, ok := item.(string); !ok {
+				return fmt.Errorf("parameter %q[%d]: expected string, got %T", name, idx, item)
+			}
+		}
+		return nil
+	case paramKindObject:
+		if _, ok := val.(map[string]any); ok {
+			return nil
+		}
+		return fmt.Errorf("parameter %q: expected object, got %T", name, val)
+	}
+	return fmt.Errorf("parameter %q: unsupported kind", name)
 }
 
 // LogEffective writes the effective configuration to the logger at info level, redacting all API keys.
@@ -225,6 +347,7 @@ func (c *Config) LogEffective(log *zap.Logger) {
 			"health_path":               p.HealthPath,
 			"max_inflight_per_instance": p.MaxInflight,
 			"rate_limit":                p.RateLimit,
+			"parameters":                p.Parameters,
 			"instances":                 insts,
 		})
 	}

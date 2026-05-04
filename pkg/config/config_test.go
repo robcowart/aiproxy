@@ -175,6 +175,102 @@ func TestLogEffective_RedactsKeys(t *testing.T) {
 	assert.Contains(t, rendered, "5678")
 }
 
+func TestLoad_Parameters_LlamaCPPChat(t *testing.T) {
+	y := `
+server:
+  port: 8080
+  api_key: 'x'
+pools:
+  - model: 'm'
+    endpoint: 'chat_completions'
+    schema: 'llamacpp'
+    instances: [{ url: 'http://x:1', api_key: 'k' }]
+    parameters:
+      temperature: 0.2
+      stream: false
+      stop: ['</s>', 'User:']
+      mirostat: 2
+      json_schema: { type: object }
+`
+	cfg, err := Load(writeTempConfig(t, y))
+	assert.NoError(t, err)
+	assert.NotEmpty(t, cfg.Pools[0].Parameters)
+	assert.Equal(t, false, cfg.Pools[0].Parameters["stream"])
+}
+
+func TestLoad_Parameters_RejectedOnEmbeddings(t *testing.T) {
+	y := `
+server:
+  port: 8080
+  api_key: 'x'
+pools:
+  - model: 'e'
+    endpoint: 'embeddings'
+    schema: 'llamacpp'
+    instances: [{ url: 'http://x:1', api_key: 'k' }]
+    parameters:
+      temperature: 0.2
+`
+	_, err := Load(writeTempConfig(t, y))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "chat_completions")
+}
+
+func TestLoad_Parameters_LlamaCPPOnlyKeyRejectedOnOpenAI(t *testing.T) {
+	y := `
+server:
+  port: 8080
+  api_key: 'x'
+pools:
+  - model: 'm'
+    endpoint: 'chat_completions'
+    schema: 'openai'
+    instances: [{ url: 'http://x:1', api_key: 'k' }]
+    parameters:
+      mirostat: 2
+`
+	_, err := Load(writeTempConfig(t, y))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "mirostat")
+	assert.Contains(t, err.Error(), "llamacpp")
+}
+
+func TestLoad_Parameters_UnknownKey(t *testing.T) {
+	y := `
+server:
+  port: 8080
+  api_key: 'x'
+pools:
+  - model: 'm'
+    endpoint: 'chat_completions'
+    schema: 'llamacpp'
+    instances: [{ url: 'http://x:1', api_key: 'k' }]
+    parameters:
+      bogus: 1
+`
+	_, err := Load(writeTempConfig(t, y))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "bogus")
+}
+
+func TestLoad_Parameters_TypeMismatch(t *testing.T) {
+	y := `
+server:
+  port: 8080
+  api_key: 'x'
+pools:
+  - model: 'm'
+    endpoint: 'chat_completions'
+    schema: 'llamacpp'
+    instances: [{ url: 'http://x:1', api_key: 'k' }]
+    parameters:
+      temperature: 'hot'
+`
+	_, err := Load(writeTempConfig(t, y))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "temperature")
+}
+
 func TestRedact(t *testing.T) {
 	assert.Equal(t, "", redact(""))
 	assert.Equal(t, "****", redact("abc"))

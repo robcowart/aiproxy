@@ -24,6 +24,7 @@ type Pool struct {
 	Instances  []*Instance
 	HealthPath string
 	Sessions   *SessionMap
+	Parameters map[string]any
 
 	rrCounter atomic.Uint64
 }
@@ -50,6 +51,7 @@ func NewPool(p config.PoolConfig, tr schema.Translator) (*Pool, error) {
 		Instances:  instances,
 		HealthPath: hp,
 		Sessions:   NewSessionMap(p.SessionTimeoutDuration()),
+		Parameters: p.Parameters,
 	}, nil
 }
 

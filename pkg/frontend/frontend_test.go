@@ -537,3 +537,93 @@ func TestSessionKey(t *testing.T) {
 	k2 := sessionKey(r2, "p")
 	assert.Equal(t, "conn:1.2.3.4:5555|p", k2)
 }
+
+// buildTestServerWithChatParams constructs a single-pool chat-only test server with the supplied static parameter
+// overrides on the pool, plus a backend handler that captures the upstream request body for assertions.
+func buildTestServerWithChatParams(t *testing.T, params map[string]any, chatH http.HandlerFunc) (http.Handler, func()) {
+	t.Helper()
+	chatSrv := httptest.NewServer(chatH)
+	cfg := &config.Config{
+		Server: config.ServerConfig{Host: "127.0.0.1", Port: 8080, APIKey: "clientkey", LogLevel: "info"},
+		Pools: []config.PoolConfig{{
+			Model: "chat-model", Endpoint: config.EndpointChatCompletions, Schema: config.SchemaLlamaCPP,
+			SessionTimeout: 60, HealthCheckInterval: 30,
+			Instances:  []config.InstanceConfig{{URL: chatSrv.URL, APIKey: "beK"}},
+			Parameters: params,
+		}},
+	}
+	assert.NoError(t, cfg.Validate())
+	reg, err := backend.NewRegistry(cfg, schema.NewRegistry())
+	assert.NoError(t, err)
+	m := metrics.New()
+	fwd := backend.NewForwarder(logging.NewNop(), m)
+	srv := NewFrontend(cfg, reg, fwd, logging.NewNop(), m)
+	return srv.Handler(), func() { chatSrv.Close() }
+}
+
+func TestServer_ChatCompletion_StaticParams_StreamFalseDrivesBranch(t *testing.T) {
+	var seenBody string
+	var seenAccept string
+	chatH := func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		seenBody = string(body)
+		seenAccept = r.Header.Get("Accept")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"1","object":"chat.completion","created":1,"model":"chat-model",` +
+			`"choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`))
+	}
+	h, cleanup := buildTestServerWithChatParams(t, map[string]any{
+		"temperature": 0.2,
+		"stream":      false,
+		"top_k":       40,
+	}, chatH)
+	defer cleanup()
+
+	payload := bytes.NewBufferString(`{"model":"chat-model","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", payload)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer clientkey")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"),
+		"override stream:false must drive non-streaming response branch")
+	assert.NotContains(t, w.Body.String(), "data: ")
+	assert.Contains(t, w.Body.String(), `"choices"`)
+
+	assert.Contains(t, seenBody, `"temperature":0.2`)
+	assert.Contains(t, seenBody, `"top_k":40`)
+	// schema.ChatRequest.Stream is omitempty, so a false value drops the field entirely from the upstream body.
+	// The branching evidence is the application/json Content-Type returned to the client above.
+	assert.NotContains(t, seenBody, `"stream":true`)
+	_ = seenAccept
+}
+
+func TestServer_ChatCompletion_StaticParams_StreamTrueOverridesClientFalse(t *testing.T) {
+	var seenBody string
+	chatH := func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		seenBody = string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		f := w.(http.Flusher)
+		_, _ = w.Write([]byte(`data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"chat-model","choices":[{"index":0,"delta":{"content":"hi"}}]}` + "\n\n"))
+		f.Flush()
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		f.Flush()
+	}
+	h, cleanup := buildTestServerWithChatParams(t, map[string]any{"stream": true}, chatH)
+	defer cleanup()
+
+	payload := bytes.NewBufferString(`{"model":"chat-model","messages":[{"role":"user","content":"hi"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", payload)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer clientkey")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "text/event-stream", w.Header().Get("Content-Type"))
+	assert.Contains(t, w.Body.String(), "data: [DONE]")
+	assert.Contains(t, seenBody, `"stream":true`)
+}

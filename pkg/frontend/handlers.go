@@ -34,6 +34,8 @@ func (f *Frontend) handleChatCompletions(w http.ResponseWriter, r *http.Request)
 	}
 	defer pool.Release(inst)
 
+	extras := pool.ApplyChatOverrides(&req)
+
 	clientOptedOut := false
 	if req.Stream {
 		normalized, optedOut, nerr := schema.NormalizeStreamOptions(req.StreamOptions)
@@ -49,6 +51,14 @@ func (f *Frontend) handleChatCompletions(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "translate_request", err.Error())
 		return
+	}
+	if len(extras) > 0 {
+		merged, mergeErr := backend.MergeBodyExtras(breq.Body, extras)
+		if mergeErr != nil {
+			writeError(w, http.StatusInternalServerError, "translate_request", mergeErr.Error())
+			return
+		}
+		breq.Body = merged
 	}
 
 	ctx := r.Context()
@@ -288,10 +298,10 @@ func sessionKey(r *http.Request, poolName string) string {
 	return "conn:" + host + ":" + port + "|" + poolName
 }
 
-// streamChat pipes a backend SSE chat stream through the pool's translator and writes canonical OpenAI SSE frames to w.
-// Every chunk is probed for Usage (last-wins across the stream); all three built-in translators emit cumulative
-// final-chunk usage, so last-wins is correct. A canonical usage-only chunk (choices empty, usage populated) is
-// forwarded to the client only when clientOptedOut is false; either way the observed Usage is recorded on the access
+// streamChat pipes a backend SSE chat stream through the pool's translator and writes canonical OpenAI SSE frames to
+// the response. Every chunk is probed for Usage (last-wins across the stream); all three built-in translators emit
+// cumulative final-chunk usage, so last-wins is correct. A canonical usage-only chunk (choices empty, usage populated)
+// is forwarded to the client only when clientOptedOut is false; either way the observed Usage is recorded on the access
 // log recorder and token counters after the stream closes. finish (from Forwarder.Do) is invoked when the stream
 // terminates so the backend access-log line includes the final prompt_tokens/completion_tokens.
 func (f *Frontend) streamChat(ctx context.Context, w http.ResponseWriter, pool *backend.Pool, inst *backend.Instance, body io.ReadCloser, clientOptedOut bool, finish func(*schema.Usage)) {

@@ -26,5 +26,28 @@ pools:
         # tls:                                  # May be necessary if URL is https:
         #   ca_file: '/path/to/backend-ca.pem'  # Custom CA certificate for backend validation (use OS-installed CA certs if not specified)
         #   insecure_skip_verify: false         # Set to true to skip certificate verification (not recommended for production)
-    session_timeout: 300       # seconds
-    health_check_interval: 30  # seconds
+    session_timeout: 300      # seconds
+    health_check_interval: 30 # seconds
+    # parameters:                # Optional: statically override request fields for every chat_completions request to this pool. Only valid when endpoint is 'chat_completions'.
+    #   temperature: 0.2         # number, 0..2
+    #   top_p: 0.95              # number
+    #   top_k: 40                # integer (llamacpp/openai-compatible extension)
+    #   min_p: 0.05              # number  (llamacpp/openai-compatible extension)
+    #   max_tokens: 2048         # integer; -1 = unlimited
+    #   stream: false            # bool; overrides client's stream setting (drives proxy response shape too)
+    #   stop: ['</s>', 'User:']  # array of strings
+    #   presence_penalty: 0.0    # number, -2..2
+    #   frequency_penalty: 0.0   # number, -2..2
+    #   repeat_penalty: 1.1      # number   (llamacpp/openai-compatible extension)
+    #   n: 1                     # integer
+    #   seed: 42                 # integer; -1 = random
+    #   logprobs: 0              # integer; max 5
+    #   echo: false              # bool
+    #   suffix: ''               # string (for code infill)
+    #   # llamacpp-only:
+    #   mirostat: 0              # 0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0
+    #   mirostat_tau: 5.0
+    #   mirostat_eta: 0.1
+    #   grammar: ''              # BNF-like grammar
+    #   json_schema: {}          # object: JSON schema constraint
+    #   cache_prompt: true       # reuse KV cache from previous requests
