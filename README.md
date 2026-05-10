@@ -29,14 +29,17 @@ server:
   host: '0.0.0.0'
   port: 8080
   api_key: '012345678901234567890123456789'
-  log_level: 'info'  # debug, info, warn, error
-  
+
   # TLS/HTTPS Configuration (optional)
   # Uncomment and configure to enable HTTPS
   tls:
     enabled: false  # Set to true to enable HTTPS
     # cert_file: '/path/to/server-cert.pem'     # Server certificate file
     # key_file: '/path/to/server-key.pem'       # Server private key file
+
+log:
+  level: 'info'   # debug, info, warn, error
+  format: 'json'  # json, console
 
 pools:
   - model: 'qwen3.5-122b'

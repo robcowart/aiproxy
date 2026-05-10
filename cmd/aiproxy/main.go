@@ -42,7 +42,7 @@ func run(configPath string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	log, err := logging.New(cfg.Server.LogLevel)
+	log, err := logging.New(cfg.Log.Level, cfg.Log.Format)
 	if err != nil {
 		return fmt.Errorf("build logger: %w", err)
 	}

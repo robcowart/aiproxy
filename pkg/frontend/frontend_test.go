@@ -40,11 +40,11 @@ func buildTestServerWithMetrics(t *testing.T, chatH, embH, rrH http.HandlerFunc)
 
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			Host:     "127.0.0.1",
-			Port:     8080,
-			APIKey:   "clientkey",
-			LogLevel: "info",
+			Host:   "127.0.0.1",
+			Port:   8080,
+			APIKey: "clientkey",
 		},
+		Log: config.LogConfig{Level: "info", Format: "json"},
 		Pools: []config.PoolConfig{
 			{
 				Model: "chat-model", Endpoint: config.EndpointChatCompletions, Schema: config.SchemaLlamaCPP,
@@ -544,7 +544,8 @@ func buildTestServerWithChatParams(t *testing.T, params map[string]any, chatH ht
 	t.Helper()
 	chatSrv := httptest.NewServer(chatH)
 	cfg := &config.Config{
-		Server: config.ServerConfig{Host: "127.0.0.1", Port: 8080, APIKey: "clientkey", LogLevel: "info"},
+		Server: config.ServerConfig{Host: "127.0.0.1", Port: 8080, APIKey: "clientkey"},
+		Log:    config.LogConfig{Level: "info", Format: "json"},
 		Pools: []config.PoolConfig{{
 			Model: "chat-model", Endpoint: config.EndpointChatCompletions, Schema: config.SchemaLlamaCPP,
 			SessionTimeout: 60, HealthCheckInterval: 30,

@@ -41,16 +41,25 @@ const (
 // Config is the fully validated runtime configuration.
 type Config struct {
 	Server ServerConfig `koanf:"server"`
+	Log    LogConfig    `koanf:"log"`
 	Pools  []PoolConfig `koanf:"pools"`
 }
 
 // ServerConfig describes the client-facing HTTP server.
 type ServerConfig struct {
-	Host     string    `koanf:"host"`
-	Port     int       `koanf:"port"`
-	APIKey   string    `koanf:"api_key"`
-	LogLevel string    `koanf:"log_level"`
-	TLS      TLSConfig `koanf:"tls"`
+	Host   string    `koanf:"host"`
+	Port   int       `koanf:"port"`
+	APIKey string    `koanf:"api_key"`
+	TLS    TLSConfig `koanf:"tls"`
+}
+
+// LogConfig configures the process-wide logger.
+type LogConfig struct {
+	// Level is the minimum log level to emit. One of: debug, info, warn, error. Defaults to "info".
+	Level string `koanf:"level"`
+	// Format selects the encoder. One of: json (structured, production default), console (human-readable). Defaults
+	// to "json".
+	Format string `koanf:"format"`
 }
 
 // TLSConfig configures optional HTTPS for the client-facing server.
@@ -148,8 +157,21 @@ func (c *Config) Validate() error {
 	if c.Server.APIKey == "" {
 		return errors.New("server.api_key is required")
 	}
-	if c.Server.LogLevel == "" {
-		c.Server.LogLevel = "info"
+	if c.Log.Level == "" {
+		c.Log.Level = "info"
+	}
+	switch strings.ToLower(c.Log.Level) {
+	case "debug", "info", "warn", "warning", "error":
+	default:
+		return fmt.Errorf("log.level: unknown level %q (expected debug|info|warn|error)", c.Log.Level)
+	}
+	if c.Log.Format == "" {
+		c.Log.Format = "json"
+	}
+	switch strings.ToLower(c.Log.Format) {
+	case "json", "console":
+	default:
+		return fmt.Errorf("log.format: unknown format %q (expected json|console)", c.Log.Format)
 	}
 	if c.Server.TLS.Enabled {
 		if c.Server.TLS.CertFile == "" || c.Server.TLS.KeyFile == "" {
@@ -353,11 +375,14 @@ func (c *Config) LogEffective(log *zap.Logger) {
 	}
 	log.Info("effective configuration",
 		zap.Any("server", map[string]any{
-			"host":      c.Server.Host,
-			"port":      c.Server.Port,
-			"api_key":   redact(c.Server.APIKey),
-			"log_level": c.Server.LogLevel,
-			"tls":       c.Server.TLS,
+			"host":    c.Server.Host,
+			"port":    c.Server.Port,
+			"api_key": redact(c.Server.APIKey),
+			"tls":     c.Server.TLS,
+		}),
+		zap.Any("log", map[string]any{
+			"level":  c.Log.Level,
+			"format": c.Log.Format,
 		}),
 		zap.Any("pools", redactedPools),
 	)

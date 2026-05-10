@@ -16,9 +16,11 @@ server:
   host: '0.0.0.0'
   port: 8080
   api_key: 'supersecretclientkey'
-  log_level: 'info'
   tls:
     enabled: false
+log:
+  level: 'info'
+  format: 'json'
 pools:
   - model: 'qwen3.5-122b'
     endpoint: 'chat_completions'
@@ -51,10 +53,85 @@ func TestLoad_Valid(t *testing.T) {
 	cfg, err := Load(p)
 	assert.NoError(t, err)
 	assert.Equal(t, 8080, cfg.Server.Port)
+	assert.Equal(t, "info", cfg.Log.Level)
+	assert.Equal(t, "json", cfg.Log.Format)
 	assert.Len(t, cfg.Pools, 2)
 	assert.Equal(t, SchemaLlamaCPP, cfg.Pools[0].Schema)
 	assert.Equal(t, EndpointChatCompletions, cfg.Pools[0].Endpoint)
 	assert.Equal(t, 300, cfg.Pools[0].SessionTimeout)
+}
+
+func TestLoad_LogDefaults(t *testing.T) {
+	y := `
+server:
+  port: 8080
+  api_key: 'x'
+pools:
+  - model: 'm'
+    endpoint: 'chat_completions'
+    schema: 'llamacpp'
+    instances: [{ url: 'http://x:1', api_key: 'k' }]
+`
+	cfg, err := Load(writeTempConfig(t, y))
+	assert.NoError(t, err)
+	assert.Equal(t, "info", cfg.Log.Level)
+	assert.Equal(t, "json", cfg.Log.Format)
+}
+
+func TestLoad_LogConsoleFormat(t *testing.T) {
+	y := `
+server:
+  port: 8080
+  api_key: 'x'
+log:
+  level: 'debug'
+  format: 'console'
+pools:
+  - model: 'm'
+    endpoint: 'chat_completions'
+    schema: 'llamacpp'
+    instances: [{ url: 'http://x:1', api_key: 'k' }]
+`
+	cfg, err := Load(writeTempConfig(t, y))
+	assert.NoError(t, err)
+	assert.Equal(t, "debug", cfg.Log.Level)
+	assert.Equal(t, "console", cfg.Log.Format)
+}
+
+func TestLoad_LogInvalidLevel(t *testing.T) {
+	y := `
+server:
+  port: 8080
+  api_key: 'x'
+log:
+  level: 'screaming'
+pools:
+  - model: 'm'
+    endpoint: 'chat_completions'
+    schema: 'llamacpp'
+    instances: [{ url: 'http://x:1', api_key: 'k' }]
+`
+	_, err := Load(writeTempConfig(t, y))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "log.level")
+}
+
+func TestLoad_LogInvalidFormat(t *testing.T) {
+	y := `
+server:
+  port: 8080
+  api_key: 'x'
+log:
+  format: 'xml'
+pools:
+  - model: 'm'
+    endpoint: 'chat_completions'
+    schema: 'llamacpp'
+    instances: [{ url: 'http://x:1', api_key: 'k' }]
+`
+	_, err := Load(writeTempConfig(t, y))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "log.format")
 }
 
 func TestLoad_EnvOverride(t *testing.T) {
@@ -70,7 +147,8 @@ func TestLoad_MissingAPIKey(t *testing.T) {
 server:
   host: '0.0.0.0'
   port: 8080
-  log_level: 'info'
+log:
+  level: 'info'
 pools:
   - model: 'x'
     endpoint: 'chat_completions'
