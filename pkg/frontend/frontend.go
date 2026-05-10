@@ -124,6 +124,7 @@ func (f *Frontend) buildHandler() http.Handler {
 	mux.Handle("POST /v1/chat/completions", http.HandlerFunc(f.handleChatCompletions))
 	mux.Handle("POST /v1/embeddings", http.HandlerFunc(f.handleEmbeddings))
 	mux.Handle("POST /v1/rerank", http.HandlerFunc(f.handleRerank))
+	mux.Handle("POST /infill", http.HandlerFunc(f.handleInfill))
 
 	skip := map[string]bool{"/health": true, "/metrics": true}
 	var h http.Handler = mux

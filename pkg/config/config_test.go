@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -347,6 +348,65 @@ pools:
 	_, err := Load(writeTempConfig(t, y))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "temperature")
+}
+
+func TestLoad_InfillEndpoint_LlamaCPPAccepted(t *testing.T) {
+	y := `
+server:
+  port: 8080
+  api_key: 'x'
+pools:
+  - model: 'fim'
+    endpoint: 'infill'
+    schema: 'llamacpp'
+    instances: [{ url: 'http://x:1', api_key: 'k' }]
+`
+	cfg, err := Load(writeTempConfig(t, y))
+	assert.NoError(t, err)
+	assert.Len(t, cfg.Pools, 1)
+	assert.Equal(t, EndpointInfill, cfg.Pools[0].Endpoint)
+	assert.Equal(t, SchemaLlamaCPP, cfg.Pools[0].Schema)
+}
+
+func TestLoad_InfillEndpoint_RejectedOnNonLlamaCPPSchemas(t *testing.T) {
+	for _, sch := range []string{"openai", "anthropic", "google", "ollama"} {
+		t.Run(sch, func(t *testing.T) {
+			y := fmt.Sprintf(`
+server:
+  port: 8080
+  api_key: 'x'
+pools:
+  - model: 'fim'
+    endpoint: 'infill'
+    schema: '%s'
+    instances: [{ url: 'http://x:1', api_key: 'k' }]
+`, sch)
+			_, err := Load(writeTempConfig(t, y))
+			assert.Error(t, err)
+			if err != nil {
+				assert.Contains(t, err.Error(), "infill")
+				assert.Contains(t, err.Error(), "llamacpp")
+			}
+		})
+	}
+}
+
+func TestLoad_InfillEndpoint_RejectsParameters(t *testing.T) {
+	y := `
+server:
+  port: 8080
+  api_key: 'x'
+pools:
+  - model: 'fim'
+    endpoint: 'infill'
+    schema: 'llamacpp'
+    instances: [{ url: 'http://x:1', api_key: 'k' }]
+    parameters:
+      temperature: 0.2
+`
+	_, err := Load(writeTempConfig(t, y))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "chat_completions")
 }
 
 func TestRedact(t *testing.T) {

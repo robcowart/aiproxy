@@ -16,11 +16,14 @@ A model-aware, OpenAI-compatible reverse proxy for pools of local/remote LLM bac
 
 ## Supported Endpoints
 
-| Endpoint         | OpenAI-compatible API  |
+| Endpoint         | API path               |
 |------------------|------------------------|
 | chat_completions | `/v1/chat/completions` |
 | embeddings       | `/v1/embeddings`       |
 | rerank           | `/v1/rerank`           |
+| infill           | `/infill`              |
+
+> `infill` is a byte-for-byte pass-through to llama.cpp's native [`/infill`](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md#post-infill-for-code-infilling) endpoint and is only valid with `schema: llamacpp`. Both the request body and the response body (including SSE stream frames) are forwarded unchanged so the wire shape matches llama.cpp exactly. Unlike the other routes there is no `/v1/` alias, no canonical OpenAI envelope, and no `data: [DONE]` sentinel on the stream.
 
 ## Example `config.yaml`
 
@@ -43,7 +46,7 @@ log:
 
 pools:
   - model: 'qwen3.5-122b'
-    endpoint: 'chat_completions' # chat_completions, embeddings, rerank
+    endpoint: 'chat_completions' # chat_completions, embeddings, rerank, infill (infill requires schema: llamacpp)
     schema: 'llamacpp' # anthropic, google, openai, llamacpp, ollama
     instances:
       - url: 'http://192.0.2.11:8080'
@@ -60,7 +63,7 @@ pools:
     health_check_interval: 30  # seconds
 
   - model: 'nemotron-embed-1b-v2'
-    endpoint: 'embeddings' # chat_completions, embeddings, rerank
+    endpoint: 'embeddings' # chat_completions, embeddings, rerank, infill (infill requires schema: llamacpp)
     schema: 'llamacpp' # anthropic, google, openai, llamacpp, ollama
     instances:
       - url: 'http://192.0.2.13:8080'

@@ -36,6 +36,7 @@ const (
 	EndpointChatCompletions EndpointType = "chat_completions"
 	EndpointEmbeddings      EndpointType = "embeddings"
 	EndpointRerank          EndpointType = "rerank"
+	EndpointInfill          EndpointType = "infill"
 )
 
 // Config is the fully validated runtime configuration.
@@ -193,7 +194,7 @@ func (c *Config) Validate() error {
 		seen[p.Model] = struct{}{}
 
 		switch p.Endpoint {
-		case EndpointChatCompletions, EndpointEmbeddings, EndpointRerank:
+		case EndpointChatCompletions, EndpointEmbeddings, EndpointRerank, EndpointInfill:
 		default:
 			return fmt.Errorf("pools[%d] (%s): invalid endpoint %q", i, p.Model, p.Endpoint)
 		}
@@ -201,6 +202,10 @@ func (c *Config) Validate() error {
 		case SchemaLlamaCPP, SchemaOpenAI, SchemaAnthropic, SchemaGoogle, SchemaOllama:
 		default:
 			return fmt.Errorf("pools[%d] (%s): invalid schema %q", i, p.Model, p.Schema)
+		}
+		if p.Endpoint == EndpointInfill && p.Schema != SchemaLlamaCPP {
+			return fmt.Errorf("pools[%d] (%s): endpoint %q requires schema %q (got %q)",
+				i, p.Model, EndpointInfill, SchemaLlamaCPP, p.Schema)
 		}
 		if len(p.Instances) == 0 {
 			return fmt.Errorf("pools[%d] (%s): at least one instance is required", i, p.Model)

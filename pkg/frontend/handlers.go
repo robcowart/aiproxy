@@ -194,6 +194,205 @@ func (f *Frontend) handleRerank(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, parsed)
 }
 
+// handleInfill is a byte-for-byte pass-through of llama.cpp's native /infill endpoint. The request body is forwarded
+// verbatim to the backend's /infill, and the backend's response (status code, Content-Type, and body bytes) is
+// returned to the client unchanged so the wire shape matches llama.cpp exactly. Streaming responses are passed
+// through as-is — no [DONE] sentinel is appended (llama.cpp's /infill does not emit one). Token usage is extracted
+// best-effort from the response (tokens_evaluated/tokens_predicted) for metrics and access-log fields without ever
+// modifying the wire bytes.
+func (f *Frontend) handleInfill(w http.ResponseWriter, r *http.Request) {
+	reqBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("read body: %v", err))
+		return
+	}
+	var probe struct {
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
+	}
+	if err := json.Unmarshal(reqBody, &probe); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("parse body: %v", err))
+		return
+	}
+	pool := f.resolvePool(w, probe.Model, config.EndpointInfill)
+	if pool == nil {
+		return
+	}
+	inst, err := pool.Pick(sessionKey(r, pool.Model))
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "no_backend", err.Error())
+		return
+	}
+	defer pool.Release(inst)
+
+	breq := &schema.BackendRequest{
+		Method: http.MethodPost,
+		Path:   "/infill",
+		Body:   reqBody,
+	}
+
+	ctx := r.Context()
+	if !probe.Stream {
+		f.passthroughInfill(ctx, w, pool, inst, breq)
+		return
+	}
+	f.streamInfill(ctx, w, pool, inst, breq)
+}
+
+// passthroughInfill issues a non-streaming /infill backend call and writes the backend's status, Content-Type, and
+// body bytes to the client unchanged. Token usage is extracted side-channel for metrics and the access-log line.
+func (f *Frontend) passthroughInfill(ctx context.Context, w http.ResponseWriter, pool *backend.Pool, inst *backend.Instance, breq *schema.BackendRequest) {
+	start := time.Now()
+	resp, finish, err := f.fwd.Do(ctx, pool, inst, breq)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "backend_error", err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	var loggedUsage *schema.Usage
+	defer func() { finish(loggedUsage) }()
+
+	f.observeClient(pool, "infill", resp.StatusCode, start)
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "backend_read", err.Error())
+		return
+	}
+
+	loggedUsage = parseInfillUsageJSON(body)
+	f.observeTokens(pool, inst, "infill", loggedUsage)
+	recordUsage(w, loggedUsage)
+
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	} else {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(body)
+}
+
+// streamInfill issues a streaming /infill backend call and copies the response bytes verbatim to the client. The
+// backend body is tee'd through an SSE scanner running in a goroutine to extract token usage from the final
+// stop:true frame; the wire bytes reaching the client are never altered. No [DONE] sentinel is appended.
+func (f *Frontend) streamInfill(ctx context.Context, w http.ResponseWriter, pool *backend.Pool, inst *backend.Instance, breq *schema.BackendRequest) {
+	if f.metrics != nil {
+		f.metrics.StreamActive.WithLabelValues(pool.Model).Inc()
+		defer f.metrics.StreamActive.WithLabelValues(pool.Model).Dec()
+	}
+	start := time.Now()
+	resp, finish, err := f.fwd.Do(ctx, pool, inst, breq)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "backend_error", err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "no_flusher", "streaming not supported")
+		finish(nil)
+		return
+	}
+
+	f.observeClient(pool, "infill", resp.StatusCode, start)
+
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	} else {
+		w.Header().Set("Content-Type", "text/event-stream")
+	}
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(resp.StatusCode)
+
+	pr, pw := io.Pipe()
+	usageCh := make(chan *schema.Usage, 1)
+	go func() {
+		usageCh <- scanInfillStreamUsage(pr)
+		_ = pr.Close()
+	}()
+
+	fw := &flushingWriter{w: w, flusher: flusher}
+	_, _ = io.Copy(fw, io.TeeReader(resp.Body, pw))
+	_ = pw.Close()
+
+	loggedUsage := <-usageCh
+	if loggedUsage != nil {
+		f.observeTokens(pool, inst, "infill", loggedUsage)
+		recordUsage(w, loggedUsage)
+	}
+	finish(loggedUsage)
+}
+
+// flushingWriter writes bytes through to w and calls flusher.Flush() after each successful write so SSE chunks reach
+// the client immediately. It does not modify the bytes in any way.
+type flushingWriter struct {
+	w       io.Writer
+	flusher http.Flusher
+}
+
+func (fw *flushingWriter) Write(p []byte) (int, error) {
+	n, err := fw.w.Write(p)
+	if n > 0 && fw.flusher != nil {
+		fw.flusher.Flush()
+	}
+	return n, err
+}
+
+// parseInfillUsageJSON extracts token usage from a llama.cpp /infill non-stream JSON body. Returns nil when the body
+// is not valid JSON or carries no token counts; this is intentionally best-effort and never alters the response.
+func parseInfillUsageJSON(body []byte) *schema.Usage {
+	var probe struct {
+		TokensEvaluated int `json:"tokens_evaluated"`
+		TokensPredicted int `json:"tokens_predicted"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return nil
+	}
+	if probe.TokensEvaluated == 0 && probe.TokensPredicted == 0 {
+		return nil
+	}
+	return &schema.Usage{
+		PromptTokens:     probe.TokensEvaluated,
+		CompletionTokens: probe.TokensPredicted,
+		TotalTokens:      probe.TokensEvaluated + probe.TokensPredicted,
+	}
+}
+
+// scanInfillStreamUsage drains an SSE stream tee'd from a llama.cpp /infill stream response and returns the usage
+// recorded by the final stop:true frame, or nil if no such frame was observed. It never writes back to the client.
+func scanInfillStreamUsage(r io.Reader) *schema.Usage {
+	sse := schema.NewSSEScanner(r)
+	var last *schema.Usage
+	for {
+		ev, err := sse.Next()
+		if err != nil {
+			return last
+		}
+		if ev == nil || len(ev.Data) == 0 {
+			continue
+		}
+		var probe struct {
+			Stop            bool `json:"stop"`
+			TokensEvaluated int  `json:"tokens_evaluated"`
+			TokensPredicted int  `json:"tokens_predicted"`
+		}
+		if err := json.Unmarshal(ev.Data, &probe); err != nil {
+			continue
+		}
+		if probe.Stop && (probe.TokensEvaluated > 0 || probe.TokensPredicted > 0) {
+			last = &schema.Usage{
+				PromptTokens:     probe.TokensEvaluated,
+				CompletionTokens: probe.TokensPredicted,
+				TotalTokens:      probe.TokensEvaluated + probe.TokensPredicted,
+			}
+		}
+	}
+}
+
 // writeTranslateErr maps an error from a translator's *BackendRequest builder to an HTTP response: 501 for
 // schema.ErrUnsupportedEndpoint, 500 for anything else. Returns true when err was non-nil (and a response has been
 // written), so callers can `if writeTranslateErr(w, err) { return }`.

@@ -601,6 +601,187 @@ func TestServer_ChatCompletion_StaticParams_StreamFalseDrivesBranch(t *testing.T
 	_ = seenAccept
 }
 
+// buildInfillTestServer wires a two-pool proxy (chat + infill, both llamacpp) where the infill pool is backed by
+// infillH and the chat pool is backed by a no-op handler. Returns the handler, the metrics registry, and a cleanup
+// closure.
+func buildInfillTestServer(t *testing.T, infillH http.HandlerFunc) (http.Handler, *metrics.Metrics, func()) {
+	t.Helper()
+	chatSrv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	if infillH == nil {
+		infillH = func(http.ResponseWriter, *http.Request) {}
+	}
+	infillSrv := httptest.NewServer(infillH)
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{Host: "127.0.0.1", Port: 8080, APIKey: "clientkey"},
+		Log:    config.LogConfig{Level: "info", Format: "json"},
+		Pools: []config.PoolConfig{
+			{
+				Model: "chat-model", Endpoint: config.EndpointChatCompletions, Schema: config.SchemaLlamaCPP,
+				SessionTimeout: 60, HealthCheckInterval: 30,
+				Instances: []config.InstanceConfig{{URL: chatSrv.URL, APIKey: "beK"}},
+			},
+			{
+				Model: "infill-model", Endpoint: config.EndpointInfill, Schema: config.SchemaLlamaCPP,
+				SessionTimeout: 60, HealthCheckInterval: 30,
+				Instances: []config.InstanceConfig{{URL: infillSrv.URL, APIKey: "beK"}},
+			},
+		},
+	}
+	assert.NoError(t, cfg.Validate())
+	reg, err := backend.NewRegistry(cfg, schema.NewRegistry())
+	assert.NoError(t, err)
+	m := metrics.New()
+	fwd := backend.NewForwarder(logging.NewNop(), m)
+	srv := NewFrontend(cfg, reg, fwd, logging.NewNop(), m)
+	return srv.Handler(), m, func() {
+		chatSrv.Close()
+		infillSrv.Close()
+	}
+}
+
+func TestServer_Infill_NonStream_BytesPassThroughVerbatim(t *testing.T) {
+	const backendBody = `{"index":0,"content":"foo()","id_slot":0,"stop":true,"model":"infill-model","tokens_evaluated":12,"tokens_predicted":4,"tokens_cached":0,"generation_settings":{"temperature":0.2},"prompt":"def hello","truncated":false,"stopped_eos":true,"stopped_word":false,"stopped_limit":false,"stopping_word":"","has_new_line":false,"timings":{"prompt_n":12,"prompt_ms":50.5,"prompt_per_token_ms":4.2,"prompt_per_second":237.6,"predicted_n":4,"predicted_ms":18.2,"predicted_per_token_ms":4.55,"predicted_per_second":219.8}}`
+	const reqBody = `{"model":"infill-model","input_prefix":"def hello","input_suffix":"return None","n_predict":32,"temperature":0.2,"cache_prompt":true}`
+	var seenAuth, seenPath, seenMethod string
+	var seenReq []byte
+	infillH := func(w http.ResponseWriter, r *http.Request) {
+		seenAuth = r.Header.Get("Authorization")
+		seenPath = r.URL.Path
+		seenMethod = r.Method
+		seenReq, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(backendBody))
+	}
+	h, m, cleanup := buildInfillTestServer(t, infillH)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPost, "/infill", bytes.NewBufferString(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer clientkey")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "Bearer beK", seenAuth)
+	assert.Equal(t, http.MethodPost, seenMethod)
+	assert.Equal(t, "/infill", seenPath)
+	assert.Equal(t, reqBody, string(seenReq), "request body must be forwarded verbatim")
+	assert.Equal(t, backendBody, w.Body.String(), "response body must be returned to the client byte-for-byte")
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+	assert.Equal(t, 12.0, counterValue(t, m.ClientPromptTokens, "infill-model", "infill"))
+	assert.Equal(t, 4.0, counterValue(t, m.ClientCompletionTokens, "infill-model", "infill"))
+}
+
+func TestServer_Infill_Stream_BytesPassThroughVerbatim_NoDoneSentinel(t *testing.T) {
+	frames := []string{
+		`data: {"index":0,"content":"foo","stop":false,"id_slot":0,"multimodal":false}` + "\n\n",
+		`data: {"index":0,"content":"()","stop":false,"id_slot":0,"multimodal":false}` + "\n\n",
+		`data: {"index":0,"content":"","stop":true,"id_slot":0,"model":"infill-model","tokens_evaluated":12,"tokens_predicted":4,"timings":{"predicted_n":4}}` + "\n\n",
+	}
+	expected := strings.Join(frames, "")
+	infillH := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		f := w.(http.Flusher)
+		for _, fr := range frames {
+			_, _ = w.Write([]byte(fr))
+			f.Flush()
+		}
+	}
+	h, m, cleanup := buildInfillTestServer(t, infillH)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPost, "/infill",
+		bytes.NewBufferString(`{"model":"infill-model","stream":true,"input_prefix":"x","input_suffix":"y"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer clientkey")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "text/event-stream", w.Header().Get("Content-Type"))
+	body := w.Body.String()
+	assert.Equal(t, expected, body, "SSE stream must be forwarded byte-for-byte")
+	assert.NotContains(t, body, "[DONE]", "llama.cpp /infill does not emit [DONE]; the proxy must not add one")
+	assert.Equal(t, 12.0, counterValue(t, m.ClientPromptTokens, "infill-model", "infill"))
+	assert.Equal(t, 4.0, counterValue(t, m.ClientCompletionTokens, "infill-model", "infill"))
+}
+
+func TestServer_Infill_BackendErrorPassThrough(t *testing.T) {
+	const errBody = `{"error":{"code":400,"message":"prompt is required","type":"invalid_request_error"}}`
+	infillH := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(errBody))
+	}
+	h, _, cleanup := buildInfillTestServer(t, infillH)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPost, "/infill",
+		bytes.NewBufferString(`{"model":"infill-model"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer clientkey")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, errBody, w.Body.String(), "backend error body must be returned verbatim, not rewrapped")
+}
+
+func TestServer_Infill_UnknownModel(t *testing.T) {
+	h, _, cleanup := buildInfillTestServer(t, nil)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPost, "/infill",
+		bytes.NewBufferString(`{"model":"nope"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer clientkey")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), "model_not_found")
+}
+
+func TestServer_Infill_WrongEndpointForModel(t *testing.T) {
+	h, _, cleanup := buildInfillTestServer(t, nil)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPost, "/infill",
+		bytes.NewBufferString(`{"model":"chat-model"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer clientkey")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "wrong_endpoint")
+}
+
+func TestServer_Infill_V1AliasNotRegistered(t *testing.T) {
+	h, _, cleanup := buildInfillTestServer(t, nil)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/infill",
+		bytes.NewBufferString(`{"model":"infill-model"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer clientkey")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code, "/v1/infill must not be registered")
+}
+
+func TestServer_Infill_InvalidJSONBody(t *testing.T) {
+	h, _, cleanup := buildInfillTestServer(t, nil)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPost, "/infill", bytes.NewBufferString(`not json`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer clientkey")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid_request")
+}
+
 func TestServer_ChatCompletion_StaticParams_StreamTrueOverridesClientFalse(t *testing.T) {
 	var seenBody string
 	chatH := func(w http.ResponseWriter, r *http.Request) {

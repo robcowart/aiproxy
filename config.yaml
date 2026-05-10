@@ -16,7 +16,7 @@ log:
 
 pools:
   - model: 'MODEL-NAME'
-    endpoint: 'chat_completions' # chat_completions, embeddings, rerank
+    endpoint: 'chat_completions' # chat_completions, embeddings, rerank, infill (infill requires schema: llamacpp)
     schema: 'llamacpp' # anthropic, google, openai, llamacpp, ollama
     instances:
       - url: 'http://192.0.2.11:8080'
